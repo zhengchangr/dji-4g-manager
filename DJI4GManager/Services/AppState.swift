@@ -16,6 +16,8 @@ final class AppState {
     }
 
     var phase: Phase = .searching
+    /// 当前识别到的模块代际（未插模块时为 nil）。
+    var detectedGeneration: DJIModuleGeneration?
     var status = ModuleStatus()
     var pdp = PDPStatus()
     var network = NetworkSnapshot()
@@ -152,11 +154,13 @@ final class AppState {
         while !Task.isCancelled {
             let generations = LibusbTransport.presentGenerations()
             if generations.contains(.gen1) {
+                detectedGeneration = .gen1
                 if !session.isConnected {
                     await connect()
                 }
                 await refreshAll()
             } else if generations.contains(.gen2) {
+                detectedGeneration = .gen2
                 if session.isConnected {
                     await session.close()
                 }
@@ -167,6 +171,7 @@ final class AppState {
                 }
                 refreshNetworkState()
             } else {
+                detectedGeneration = nil
                 if session.isConnected {
                     await session.close()
                 }

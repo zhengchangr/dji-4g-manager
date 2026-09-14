@@ -45,5 +45,11 @@ cd "$OUT"
 zip -rq "DJI4GManager-$CONFIGURATION.zip" DJI4GManager.app
 shasum -a 256 "DJI4GManager-$CONFIGURATION.zip" > "DJI4GManager-$CONFIGURATION.zip.sha256"
 
+# 只让“应用程序”里的正式副本出现在启动台，
+# 取消登记 build/dist 下的临时副本，避免启动台越积越多。
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+"$LSREGISTER" -u "$APP" >/dev/null 2>&1 || true
+"$LSREGISTER" -u "$OUT/DJI4GManager.app" >/dev/null 2>&1 || true
+
 echo "==> Done: $OUT/DJI4GManager-$CONFIGURATION.zip"
 cat "DJI4GManager-$CONFIGURATION.zip.sha256"

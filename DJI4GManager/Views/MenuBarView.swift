@@ -48,9 +48,14 @@ struct MenuBarView: View {
 
     private var phaseText: String {
         return switch appState.phase {
-        case .connected: "模块已连接"
+        case .connected:
+            if let generation = appState.detectedGeneration {
+                "\(generation.displayName)模块已连接"
+            } else {
+                "模块已连接"
+            }
         case .switching: "模块切换中…"
-        case .gen2Only: "已识别二代模块"
+        case .gen2Only: "已识别二代模块（2ca3:4009）"
         case .failed: "连接失败"
         case .searching: "等待模块…"
         }
@@ -63,10 +68,11 @@ struct MenuBarView: View {
             }
             return "管理口不可用 · 等待系统识别网卡"
         }
+        let generationPrefix = appState.detectedGeneration.map { "\($0.displayName)模块 · " } ?? ""
         if appState.status.usbNetMode >= 0 {
-            return appState.status.usbNetModeDescription
+            return generationPrefix + appState.status.usbNetModeDescription
         }
-        return appState.status.simState
+        return generationPrefix + appState.status.simState
     }
 
     private func networkRow(title: String, value: String, icon: String) -> some View {

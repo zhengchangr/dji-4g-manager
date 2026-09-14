@@ -13,6 +13,7 @@ struct StatusView: View {
                 if appState.isConnected {
                     heroCard
                     LazyVGrid(columns: columns, spacing: 14) {
+                        metricCard("模块代际", value: appState.detectedGeneration?.detailText ?? "未知", icon: "cpu")
                         metricCard("SIM 状态", value: appState.status.simState, icon: "simcard")
                         metricCard("运营商", value: appState.status.operatorName.isEmpty ? "未知" : appState.status.operatorName, icon: "building.2")
                         signalCard
@@ -32,10 +33,10 @@ struct StatusView: View {
                 } else {
                     EmptyStateView(
                         icon: appState.isGen2Only ? "simcard" : "cable.connector.slash",
-                        title: appState.isGen2Only ? "二代模块已识别" : "等待模块接入",
+                        title: appState.isGen2Only ? "已识别二代模块（2ca3:4009）" : "等待模块接入",
                         message: appState.isGen2Only
                             ? "二代模块封闭了 USB 管理口，无法读取运营商、信号、IMEI、手机号、固件等状态。请切换到「上网」页查看它是否被系统识别为网卡。"
-                            : "请将大疆一代 4G 模块通过支持数据传输的 USB-C 线连接到 Mac，并插入 SIM 卡。"
+                            : "请将大疆一代（2ca3:4006）或二代（2ca3:4009）4G 模块通过支持数据传输的 USB-C 线连接到 Mac。"
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.top, 80)
@@ -136,6 +137,9 @@ struct StatusView: View {
                         .font(.title2.weight(.semibold))
                     HStack(spacing: 8) {
                         StatusBadge(title: phaseBadgeText, color: phaseBadgeColor)
+                        if let generation = appState.detectedGeneration {
+                            StatusBadge(title: generation.detailText, color: .blue)
+                        }
                         if !appState.status.model.isEmpty {
                             StatusBadge(title: appState.status.model, color: .secondary)
                         }
@@ -198,7 +202,10 @@ struct StatusView: View {
         if !appState.status.model.isEmpty {
             return "\(appState.status.manufacturer) \(appState.status.model)"
         }
-        return "大疆一代 4G 模块"
+        if let generation = appState.detectedGeneration {
+            return "大疆\(generation.displayName) 4G 模块"
+        }
+        return "大疆 4G 模块"
     }
 
     private var bandText: String {

@@ -20,6 +20,16 @@ enum DJIModuleGeneration: Equatable, CaseIterable, Sendable {
         case .gen2: return "二代"
         }
     }
+
+    /// 形如 2ca3:4006 的 USB 标识，用于界面展示。
+    var usbID: String {
+        String(format: "2ca3:%04X", productID)
+    }
+
+    /// 形如“一代模块（2ca3:4006）”的完整说明。
+    var detailText: String {
+        "\(displayName)模块（\(usbID)）"
+    }
 }
 
 /// 通过 libusb 与大疆一代 4G 模块（USB 2ca3:4006）通信。

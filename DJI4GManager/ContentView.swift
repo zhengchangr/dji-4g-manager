@@ -98,11 +98,15 @@ struct ContentView: View {
 
     private var phaseText: String {
         switch appState.phase {
-        case .connected: "模块已连接"
-        case .switching: "模块切换中…"
-        case .gen2Only: "已识别二代模块"
-        case .failed: "连接失败"
-        case .searching: "等待模块…"
+        case .connected:
+            if let generation = appState.detectedGeneration {
+                return "\(generation.displayName)模块已连接"
+            }
+            return "模块已连接"
+        case .switching: return "模块切换中…"
+        case .gen2Only: return "已识别二代模块"
+        case .failed: return "连接失败"
+        case .searching: return "等待模块…"
         }
     }
 }

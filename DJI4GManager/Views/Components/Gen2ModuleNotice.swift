@@ -13,7 +13,7 @@ struct Gen2ModuleNotice: View {
                 HStack(spacing: 8) {
                     Image(systemName: "simcard")
                         .foregroundStyle(Color.orange)
-                    Text("检测到大疆二代 4G 模块")
+                    Text("检测到大疆二代 4G 模块（2ca3:4009）")
                         .font(.callout.weight(.semibold))
                     StatusBadge(title: "仅网卡模式", color: .orange)
                 }
