@@ -8,6 +8,8 @@ struct ModuleStatus: Equatable {
     var revision = ""
     var imei = ""
     var phoneNumber = ""
+    /// 号码来源（AT+CNUM 或 SIM 卡本机号码电话簿）。
+    var phoneNumberSource = ""
     var simState = "未知"
     var signalLevel = -1        // 0...31，-1 表示未知
     var operatorName = ""

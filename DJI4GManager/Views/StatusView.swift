@@ -85,7 +85,7 @@ struct StatusView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if !appState.status.phoneNumber.isEmpty {
-                    Text("来自模块（AT+CNUM）")
+                    Text("来自模块（\(appState.status.phoneNumberSource.isEmpty ? "AT+CNUM" : appState.status.phoneNumberSource)）")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 } else if !appState.manualPhoneNumber.isEmpty {
@@ -101,7 +101,7 @@ struct StatusView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("设置手机号码")
                 .font(.title3.weight(.semibold))
-            Text("模块未从 SIM 卡读到本机号码（AT+CNUM 无返回）。手动填写的号码只保存在本机，用于展示。")
+            Text("模块未从 SIM 卡读到本机号码（AT+CNUM 无返回，SIM 卡的本机号码电话簿也为空）。手动填写的号码只保存在本机，用于展示。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             TextField("手机号码（国际格式 +86…）", text: $phoneDraft)

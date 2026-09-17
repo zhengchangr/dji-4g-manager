@@ -67,6 +67,41 @@ final class ATClientTests: XCTestCase {
         XCTAssertEqual(status.phoneNumber, "")
     }
 
+    func testPhoneNumberFallsBackToOwnNumberPhonebook() {
+        // 运营商没把号码写进 CNUM 时，回退读取 SIM 卡“本机号码”电话簿。
+        let transport = StaticTransport(responses: [
+            "AT+CNUM": "\r\nOK\r\n",
+            "AT+CPBS?": "\r\n+CPBS: \"SM\",1,250\r\nOK\r\n",
+            "AT+CPBS=\"ON\"": "OK\r\n",
+            "AT+CPBR=1,10": "\r\n+CPBR: 1,\"\",129,\"\"\r\n+CPBR: 2,\"+8613800138000\",145,\"\"\r\nOK\r\n",
+            "AT+CPBS=\"SM\"": "OK\r\n",
+        ])
+        try! transport.open()
+        let status = try! ATClient.refreshStatus(transport: transport)
+        XCTAssertEqual(status.phoneNumber, "+8613800138000")
+        XCTAssertEqual(status.phoneNumberSource, "SIM 卡本机号码（AT+CPBR）")
+    }
+
+    func testPhoneNumberPrefersCNUMOverPhonebook() {
+        let transport = StaticTransport(responses: [
+            "AT+CNUM": "\r\n+CNUM: \"Line 1\",\"+8613900139000\",145\r\nOK\r\n",
+            "AT+CPBR=1,10": "\r\n+CPBR: 1,\"+8613800138000\",145,\"\"\r\nOK\r\n",
+        ])
+        let status = try! ATClient.refreshStatus(transport: transport)
+        XCTAssertEqual(status.phoneNumber, "+8613900139000")
+        XCTAssertEqual(status.phoneNumberSource, "AT+CNUM")
+    }
+
+    func testPhoneNumberEmptyWhenBothSourcesEmpty() {
+        let transport = StaticTransport(responses: [
+            "AT+CNUM": "\r\nOK\r\n",
+            "AT+CPBR=1,10": "\r\n+CPBR: 1,\"FFFFFFFF\",129,\"\"\r\nOK\r\n",
+        ])
+        let status = try! ATClient.refreshStatus(transport: transport)
+        XCTAssertEqual(status.phoneNumber, "")
+        XCTAssertEqual(status.phoneNumberSource, "")
+    }
+
     func testQueryPDPStatusParsesAPNContexts() throws {
         let transport = StaticTransport(responses: [
             "AT+CGDCONT?": "\r\n+CGDCONT: 1,\"IP\",\"cmnet\",\"0.0.0.0\",0,0\r\n+CGDCONT: 2,\"IP\",\"\",\"0.0.0.0\",0,0\r\nOK\r\n",

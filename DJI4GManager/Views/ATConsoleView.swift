@@ -17,6 +17,9 @@ struct ATConsoleView: View {
         "AT+CGACT?",
         "AT+CGPADDR=1",
         "AT+CNUM",
+        "AT+CPBS=\"ON\"",
+        "AT+CPBR=1,10",
+        "AT+CPBS?",
         "AT+CGSN",
     ]
 

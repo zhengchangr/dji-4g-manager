@@ -12,7 +12,9 @@ enum ATClient {
         status.model = query(transport, "AT+CGMM", prefix: "+CGMM:")
         status.revision = parseFirmware(queryRaw(transport, "AT+CGMR"))
         status.imei = firstDigitsLine(queryRaw(transport, "AT+CGSN"))
-        status.phoneNumber = parseCNUM(queryRaw(transport, "AT+CNUM"))
+        let phone = readPhoneNumber(transport)
+        status.phoneNumber = phone.number
+        status.phoneNumberSource = phone.source
         status.simState = parseSIMState(query(transport, "AT+CPIN?", prefix: "+CPIN:"))
         status.signalLevel = parseCSQ(query(transport, "AT+CSQ", prefix: "+CSQ:"))
         status.operatorName = parseOperator(query(transport, "AT+COPS?", prefix: "+COPS:"))
@@ -285,6 +287,54 @@ enum ATClient {
             return -1
         }
         return mode
+    }
+
+    /// 读取本机号码：优先 `AT+CNUM`，它直接返回 SIM 卡登记的本机号码；
+    /// 但很多运营商没有把号码写进 SIM，此时回退读取 SIM 卡的
+    /// “本机号码”电话簿（EF_MSISDN，电话簿名 `ON`）。
+    private static func readPhoneNumber(_ transport: any ModemTransport) -> (number: String, source: String) {
+        let cnum = parseCNUM(queryRaw(transport, "AT+CNUM"))
+        if !cnum.isEmpty {
+            return (cnum, "AT+CNUM")
+        }
+
+        let previousStorage = parseCPBSStorage(queryRaw(transport, "AT+CPBS?"))
+        _ = queryRaw(transport, "AT+CPBS=\"ON\"")
+        let numbers = parseCPBR(queryRaw(transport, "AT+CPBR=1,10"))
+        let restoreStorage = (previousStorage?.isEmpty == false ? previousStorage : nil) ?? "SM"
+        if restoreStorage != "ON" {
+            _ = queryRaw(transport, "AT+CPBS=\"\(restoreStorage)\"")
+        }
+        if let first = numbers.first {
+            return (first, "SIM 卡本机号码（AT+CPBR）")
+        }
+        return ("", "")
+    }
+
+    /// 解析 `AT+CPBS?` 当前电话簿名，例如 `+CPBS: "SM",1,250` → `SM`。
+    private static func parseCPBSStorage(_ response: String) -> String? {
+        for line in response.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("+CPBS:") else { continue }
+            return extractQuotedFields(trimmed).first(where: { !$0.isEmpty })
+        }
+        return nil
+    }
+
+    /// 解析 `AT+CPBR` 返回的本机号码列表。
+    private static func parseCPBR(_ response: String) -> [String] {
+        var numbers: [String] = []
+        for line in response.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("+CPBR:") else { continue }
+            for field in extractQuotedFields(trimmed) {
+                if let number = canonicalPhoneCandidate(field) {
+                    numbers.append(number)
+                    break
+                }
+            }
+        }
+        return numbers
     }
 
     /// 解析 AT+CNUM 响应，提取第一个有效本机号码。

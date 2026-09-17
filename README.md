@@ -24,7 +24,7 @@ English: DJI 4G Manager is an independent open-source utility for macOS that tal
 |---|---|---|
 | 一 / 二代模块识别 | ✅ | 自动区分一代（2ca3:4006）与二代（2ca3:4009），界面显示代际与 USB 标识 |
 | 二代模块提示 | ✅ | 二代模块管理口封闭，提示“仅网卡模式” |
-| 模块状态 | ✅ | 运营商、信号、网络制式、SIM 状态、IMEI、号码、IP |
+| 模块状态 | ✅ | 运营商、信号、网络制式、SIM 状态、IMEI、号码（AT+CNUM，失败时读 SIM 本机号码电话簿）、IP |
 | USB 上网模式切换 | ✅ | 模式 0（管理）/ 1（上网）/ 2 / 3，切换后自动重启模块 |
 | 实时流量监控 | ✅ | 网卡、默认路由、实时上/下行速度、本次会话总流量 |
 | 短信收发 | ✅ | PDU 编解码（GSM 7-bit / UCS2），支持长短信分段修复与“第 x/y 段”标注 |
@@ -32,7 +32,7 @@ English: DJI 4G Manager is an independent open-source utility for macOS that tal
 | eSIM Profile 管理 | ✅ | EID、Profile 列表、启用/停用/改名/删除（SGP.22 标准指令） |
 | AT 调试 | ✅ | 任意 AT 指令与常用指令快捷按钮 |
 | 软件内更新 | ✅ | 打开设置自动检查 GitHub 新版本，下载校验后一键替换重启 |
-| 单元测试 | ✅ | 短信编解码、AT 解析、eSIM 协议、网络解析、更新与代际判断（37 项） |
+| 单元测试 | ✅ | 短信编解码、AT 解析、本机号码回退、eSIM 协议、网络解析、更新与代际判断（40 项） |
 
 ## 支持的模块
 
@@ -49,7 +49,7 @@ English: DJI 4G Manager is an independent open-source utility for macOS that tal
 2. 将 `DJI4GManager.app` 拖入“应用程序”或直接双击运行；
 3. 若 macOS 提示“无法验证开发者”，请右键 `DJI4GManager.app` → 打开。
 
-> 当前版本 0.2.3：使用临时签名、未做 Apple Developer ID 公证，首次打开可能需要在「系统设置 → 隐私与安全性」中允许。
+> 当前版本 0.2.4：使用临时签名、未做 Apple Developer ID 公证，首次打开可能需要在「系统设置 → 隐私与安全性」中允许。
 
 ## 使用
 
