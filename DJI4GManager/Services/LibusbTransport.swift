@@ -44,6 +44,9 @@ final class LibusbTransport: ModemTransport {
     private var endpointIn: UInt8 = 0
     private var endpointOut: UInt8 = 0
     private var openFlag = false
+    private var consecutiveTimeouts = 0
+    private static var lastAutoResetDate: Date = .distantPast
+    private static let autoResetCooldown: TimeInterval = 15
 
     var isOpen: Bool { openFlag }
 
@@ -51,6 +54,20 @@ final class LibusbTransport: ModemTransport {
 
     static func isDevicePresent() -> Bool {
         presentGenerations().contains(.gen1)
+    }
+
+    /// 对当前在线的一代模块执行一次 USB 重置，触发 macOS 重新枚举设备与网卡。
+    @discardableResult
+    static func resetPresentDevice() -> Bool {
+        var context: OpaquePointer?
+        guard libusb_init(&context) == 0, let context else { return false }
+        defer { libusb_exit(context) }
+
+        guard let handle = libusb_open_device_with_vid_pid(context, Self.vendorID, Self.productID) else {
+            return false
+        }
+        defer { libusb_close(handle) }
+        return libusb_reset_device(handle) == 0
     }
 
     /// 枚举当前插在 Mac 上的大疆 4G 模块代际。
@@ -102,11 +119,19 @@ final class LibusbTransport: ModemTransport {
             let candidates = try findATCandidates()
             var lastError: Error = ModemError.interfaceNotFound
             for candidate in candidates {
+                guard self.handle != nil else { break }
                 if probeCandidate(candidate) {
                     openFlag = true
+                    consecutiveTimeouts = 0
                     return
                 }
                 lastError = ModemError.usb("AT 探测失败：接口 \(candidate.interfaceNumber)")
+            }
+            // 所有候选接口 AT 探测均失败（常见于休眠唤醒后 USB 端点/固件卡死），
+            // 在冷却窗口外尝试执行一次 USB 设备重置，触发 macOS 重新枚举设备与网卡。
+            // 注意：必须使用当前的 self.handle，避免探测过程中 closeLocked() 已释放旧句柄导致 UAF。
+            if let activeHandle = self.handle {
+                attemptDeviceResetIfAllowed(handle: activeHandle)
             }
             closeLocked()
             throw lastError
@@ -144,8 +169,16 @@ final class LibusbTransport: ModemTransport {
             self.context = nil
         }
         openFlag = false
+        consecutiveTimeouts = 0
         endpointIn = 0
         endpointOut = 0
+    }
+
+    private func attemptDeviceResetIfAllowed(handle: OpaquePointer) {
+        let now = Date()
+        guard now.timeIntervalSince(Self.lastAutoResetDate) >= Self.autoResetCooldown else { return }
+        Self.lastAutoResetDate = now
+        _ = libusb_reset_device(handle)
     }
 
     private struct ATCandidate {
@@ -206,6 +239,9 @@ final class LibusbTransport: ModemTransport {
     private func probeCandidate(_ candidate: ATCandidate) -> Bool {
         guard let handle else { return false }
         guard libusb_claim_interface(handle, candidate.interfaceNumber) == 0 else { return false }
+        // 清理休眠恢复后端点可能残留的 STALL/HALT 状态。
+        _ = libusb_clear_halt(handle, candidate.endpointIn)
+        _ = libusb_clear_halt(handle, candidate.endpointOut)
         drain(endpointIn: candidate.endpointIn)
         do {
             let response = try bulkExchange(
@@ -223,7 +259,11 @@ final class LibusbTransport: ModemTransport {
         } catch {
             // 继续尝试下一个候选接口
         }
-        libusb_release_interface(handle, candidate.interfaceNumber)
+        // bulkExchange 遇到致命 USB 错误时会调用 closeLocked() 释放 handle 与 context，
+        // 必须检查 self.handle 仍然有效才能释放接口，避免 use-after-free。
+        if let activeHandle = self.handle {
+            libusb_release_interface(activeHandle, candidate.interfaceNumber)
+        }
         return false
     }
 
@@ -258,13 +298,19 @@ final class LibusbTransport: ModemTransport {
 
             let text = String(decoding: chunks, as: UTF8.self)
             if responseCompleted(text) {
+                consecutiveTimeouts = 0
                 return normalizedResponse(text)
             }
         }
 
         if chunks.isEmpty {
+            consecutiveTimeouts += 1
+            if consecutiveTimeouts >= 2 {
+                closeLocked()
+            }
             throw ModemError.timeout
         }
+        consecutiveTimeouts = 0
         return normalizedResponse(String(decoding: chunks, as: UTF8.self))
     }
 
@@ -337,11 +383,11 @@ final class LibusbTransport: ModemTransport {
         return Data(buffer[0 ..< Int(transferred)])
     }
 
-    /// libusb 中表示设备已断开 / 句柄失效的错误码：
-    /// -1 IO、-4 NO_DEVICE、-5 NOT_FOUND。遇到这些错误时关闭传输通道，
-    /// 让上层轮询逻辑重新打开设备，而不是一直卡在失效句柄上。
-    private static func isFatalUSBError(_ result: Int32) -> Bool {
-        result == -1 || result == -4 || result == -5
+    /// libusb 中表示设备已断开 / 句柄或管道失效的错误码：
+    /// -1 IO、-4 NO_DEVICE、-5 NOT_FOUND、-9 PIPE（休眠唤醒后常见 STALL/aborted）、-99 OTHER（IOKit 异常）。
+    /// 遇到这些错误时关闭传输通道，让上层轮询逻辑重新打开设备，而不是一直卡在失效句柄上。
+    static func isFatalUSBError(_ result: Int32) -> Bool {
+        result == -1 || result == -4 || result == -5 || result == -9 || result == -99
     }
 
     private func bulkExchange(_ command: String, endpointOut: UInt8, endpointIn: UInt8, timeout: TimeInterval) throws -> String {

@@ -24,6 +24,16 @@ enum ModemError: LocalizedError, Equatable {
             "USB 通信错误：\(detail)"
         }
     }
+
+    /// 是否属于底层传输通道失效/断连（应触发关闭并重连，而不是静默忽略）。
+    var isTransportFailure: Bool {
+        switch self {
+        case .notOpen, .timeout, .usb:
+            return true
+        case .deviceNotFound, .interfaceNotFound, .commandFailed:
+            return false
+        }
+    }
 }
 
 /// 模块传输通道抽象，方便接入真实硬件与演示模式。
@@ -66,6 +76,14 @@ final class ModemSession {
                 self.transport = nil
                 continuation.resume()
             }
+        }
+    }
+
+    /// 同步关闭并释放底层 USB 句柄。用于系统即将休眠（willSleep）等不能等待异步调度的时机。
+    func closeSync() {
+        queue.sync {
+            self.transport?.close()
+            self.transport = nil
         }
     }
 

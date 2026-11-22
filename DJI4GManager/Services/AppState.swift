@@ -52,6 +52,13 @@ final class AppState {
     }
     var atLog: [ATLogEntry] = []
 
+    /// 系统唤醒后自动恢复 4G 网络时的进度状态（为 nil 表示当前未在恢复）。
+    struct WakeRecoveryProgress: Equatable {
+        var step: String
+        var progress: Double
+    }
+    var wakeRecovery: WakeRecoveryProgress?
+
     /// 软件更新流程的当前状态。
     enum UpdatePhase {
         case idle
@@ -67,6 +74,10 @@ final class AppState {
 
     private let session = ModemSession()
     private var detectionTask: Task<Void, Never>?
+    private var wakeResumeTask: Task<Void, Never>?
+    private var workspaceObservers: [NSObjectProtocol] = []
+    private var isSystemSleeping = false
+    private var hadActiveNetworkBeforeSleep = false
     private var pathMonitor: NWPathMonitor?
     private var lastCounters: (rx: UInt64, tx: UInt64, date: Date)?
     private var lastSMSPoll = Date.distantPast
@@ -108,9 +119,182 @@ final class AppState {
         guard detectionTask == nil else { return }
         requestNotificationPermission()
         startPathMonitor()
+        startPowerObservers()
         detectionTask = Task { [weak self] in
             await self?.detectionLoop()
         }
+    }
+
+    /// 监听系统休眠与唤醒：
+    /// 合盖休眠前必须同步释放 libusb 接口句柄，避免 macOS 挂起/恢复 USB 复合设备时冲突导致模块与网卡一起掉线；
+    /// 开盖唤醒后留出短暂窗口让内核先完成 USB 重新枚举与网卡挂载，再恢复管理口连接。
+    private func startPowerObservers() {
+        guard workspaceObservers.isEmpty else { return }
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+
+        let sleepObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleSystemWillSleep()
+            }
+        }
+
+        let wakeObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.handleSystemDidWake()
+            }
+        }
+
+        let terminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.session.closeSync()
+            }
+        }
+
+        workspaceObservers = [sleepObserver, wakeObserver, terminateObserver]
+    }
+
+    func handleSystemWillSleep() {
+        wakeResumeTask?.cancel()
+        wakeResumeTask = nil
+        wakeRecovery = nil
+        if network.isAvailable || status.usbNetMode == 1 {
+            hadActiveNetworkBeforeSleep = true
+        }
+        isSystemSleeping = true
+        session.closeSync()
+        lastCounters = nil
+        currentSpeedDown = nil
+        currentSpeedUp = nil
+    }
+
+    func handleSystemDidWake(delay: Duration = .seconds(2)) {
+        wakeResumeTask?.cancel()
+        isSystemSleeping = true
+        let needsNetworkCheck = hadActiveNetworkBeforeSleep
+        hadActiveNetworkBeforeSleep = false
+        if needsNetworkCheck {
+            wakeRecovery = WakeRecoveryProgress(step: "电脑已唤醒，正在等待系统恢复 USB 连接…", progress: 0.15)
+        }
+        wakeResumeTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            self.isSystemSleeping = false
+            if needsNetworkCheck {
+                await self.verifyAndRecoverNetworkAfterWake()
+            }
+        }
+    }
+
+    /// 唤醒后检测大疆一代模块的 CDC ECM 网卡（Baiwang）是否卡在 media inactive：
+    /// 若休眠前处于上网状态，但唤醒后网卡未自动恢复，则自动重启模块（AT+CFUN=1,1）或重置 USB，
+    /// 触发 macOS 重新挂载网卡并重新获取 DHCP IP，同时通过 wakeRecovery 展示进度。
+    private func verifyAndRecoverNetworkAfterWake() async {
+        wakeRecovery = WakeRecoveryProgress(step: "正在检查 4G 网卡状态…", progress: 0.25)
+
+        for attempt in 0 ..< 2 {
+            guard !Task.isCancelled, !isSystemSleeping else {
+                wakeRecovery = nil
+                return
+            }
+            refreshNetworkState()
+            if network.isAvailable {
+                wakeRecovery = nil
+                return
+            }
+            if attempt == 0 {
+                wakeRecovery = WakeRecoveryProgress(step: "正在等待 4G 网卡就绪…", progress: 0.35)
+                try? await Task.sleep(for: .milliseconds(1500))
+            }
+        }
+
+        guard !Task.isCancelled, !isSystemSleeping else {
+            wakeRecovery = nil
+            return
+        }
+        guard LibusbTransport.presentGenerations().contains(.gen1) else {
+            wakeRecovery = nil
+            return
+        }
+
+        wakeRecovery = WakeRecoveryProgress(step: "检测到 4G 网卡掉线，正在重启模块以恢复网络…", progress: 0.45)
+
+        if !session.isConnected {
+            await connect()
+        }
+
+        var triggeredRecovery = false
+        if session.isConnected {
+            do {
+                try await session.run { try ATClient.reboot(transport: $0) }
+                phase = .switching
+                await session.close()
+                lastError = nil
+                triggeredRecovery = true
+            } catch {
+                await session.close()
+            }
+        }
+
+        if !triggeredRecovery {
+            if LibusbTransport.resetPresentDevice() {
+                phase = .switching
+                lastError = nil
+                triggeredRecovery = true
+            }
+        }
+
+        guard triggeredRecovery else {
+            wakeRecovery = nil
+            lastError = "唤醒后无法自动恢复模块，请尝试重新插拔 USB 线。"
+            return
+        }
+
+        // 模块软重启/重新枚举通常需要 10~15 秒，持续检测直到 Baiwang 网卡重新 active。
+        let maxChecks = 24
+        for stepIndex in 1 ... maxChecks {
+            guard !Task.isCancelled, !isSystemSleeping else {
+                wakeRecovery = nil
+                return
+            }
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, !isSystemSleeping else {
+                wakeRecovery = nil
+                return
+            }
+
+            refreshNetworkState()
+            if network.isAvailable {
+                wakeRecovery = WakeRecoveryProgress(step: "4G 网络已恢复", progress: 1.0)
+                lastError = nil
+                try? await Task.sleep(for: .milliseconds(900))
+                if !Task.isCancelled {
+                    wakeRecovery = nil
+                }
+                return
+            }
+
+            let fraction = 0.45 + (0.50 * Double(stepIndex) / Double(maxChecks))
+            let deviceBack = LibusbTransport.presentGenerations().contains(.gen1)
+            let message = (stepIndex >= 4 && deviceBack)
+                ? "模块已重新上线，正在等待 4G 网卡恢复连接…"
+                : "正在重启模块并重新枚举 USB 接口…"
+            wakeRecovery = WakeRecoveryProgress(step: message, progress: min(0.95, fraction))
+        }
+
+        wakeRecovery = nil
+        lastError = "自动恢复 4G 网络超时，请尝试重新插拔模块或在「上网」页点击仅重启。"
     }
 
     // MARK: - 软件更新
@@ -152,13 +336,19 @@ final class AppState {
 
     private func detectionLoop() async {
         while !Task.isCancelled {
+            if isSystemSleeping {
+                try? await Task.sleep(for: .milliseconds(500))
+                continue
+            }
             let generations = LibusbTransport.presentGenerations()
             if generations.contains(.gen1) {
                 detectedGeneration = .gen1
                 if !session.isConnected {
                     await connect()
                 }
-                await refreshAll()
+                if isConnected {
+                    await refreshAll()
+                }
             } else if generations.contains(.gen2) {
                 detectedGeneration = .gen2
                 if session.isConnected {
@@ -205,6 +395,9 @@ final class AppState {
             status = try await session.run { try ATClient.refreshStatus(transport: $0) }
             pdp = try await session.run { try ATClient.queryPDPStatus(transport: $0) }
             lastError = nil
+        } catch let error as ModemError where error.isTransportFailure {
+            lastError = error.localizedDescription
+            await session.close()
         } catch {
             lastError = error.localizedDescription
         }
@@ -234,9 +427,12 @@ final class AppState {
         let now = Date()
         if let last = lastCounters {
             let elapsed = now.timeIntervalSince(last.date)
-            if elapsed > 0.5 {
+            if elapsed > 0.5, counter.rx >= last.rx, counter.tx >= last.tx {
                 currentSpeedDown = Double(counter.rx - last.rx) / elapsed
                 currentSpeedUp = Double(counter.tx - last.tx) / elapsed
+            } else if counter.rx < last.rx || counter.tx < last.tx {
+                currentSpeedDown = nil
+                currentSpeedUp = nil
             }
         }
         lastCounters = (counter.rx, counter.tx, now)

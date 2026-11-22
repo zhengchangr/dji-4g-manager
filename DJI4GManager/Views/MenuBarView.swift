@@ -15,9 +15,19 @@ struct MenuBarView: View {
                 Text(phaseText)
                     .font(.callout.weight(.medium))
             }
-            Text(detailText)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if let recovery = appState.wakeRecovery {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(recovery.step)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ProgressView(value: recovery.progress, total: 1.0)
+                        .progressViewStyle(.linear)
+                }
+            } else {
+                Text(detailText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Divider()
             Label("网络", systemImage: "network")
@@ -47,6 +57,11 @@ struct MenuBarView: View {
     }
 
     private var phaseText: String {
+        if let recovery = appState.wakeRecovery {
+            return recovery.progress >= 1.0
+                ? "4G 网络已恢复"
+                : "正在恢复网络（\(Int(recovery.progress * 100))%）"
+        }
         return switch appState.phase {
         case .connected:
             if let generation = appState.detectedGeneration {
@@ -92,6 +107,9 @@ struct MenuBarView: View {
     }
 
     private var indicatorColor: Color {
+        if let recovery = appState.wakeRecovery {
+            return recovery.progress >= 1.0 ? .green : .blue
+        }
         return switch appState.phase {
         case .connected: .green
         case .switching: .orange

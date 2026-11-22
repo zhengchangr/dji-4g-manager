@@ -37,6 +37,9 @@ struct DJI4GManagerApp: App {
     }
 
     private var menuBarIcon: String {
+        if appState.wakeRecovery != nil {
+            return "arrow.triangle.2.circlepath"
+        }
         return switch appState.phase {
         case .connected: "antenna.radiowaves.left.and.right"
         case .switching: "arrow.triangle.2.circlepath"

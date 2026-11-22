@@ -8,20 +8,20 @@ enum ATClient {
     static func refreshStatus(transport: any ModemTransport) throws -> ModuleStatus {
         var status = ModuleStatus()
         status.isPresent = true
-        status.manufacturer = query(transport, "AT+CGMI", prefix: "+CGMI:")
-        status.model = query(transport, "AT+CGMM", prefix: "+CGMM:")
-        status.revision = parseFirmware(queryRaw(transport, "AT+CGMR"))
-        status.imei = firstDigitsLine(queryRaw(transport, "AT+CGSN"))
-        let phone = readPhoneNumber(transport)
+        status.manufacturer = try query(transport, "AT+CGMI", prefix: "+CGMI:")
+        status.model = try query(transport, "AT+CGMM", prefix: "+CGMM:")
+        status.revision = parseFirmware(try queryRaw(transport, "AT+CGMR"))
+        status.imei = firstDigitsLine(try queryRaw(transport, "AT+CGSN"))
+        let phone = try readPhoneNumber(transport)
         status.phoneNumber = phone.number
         status.phoneNumberSource = phone.source
-        status.simState = parseSIMState(query(transport, "AT+CPIN?", prefix: "+CPIN:"))
-        status.signalLevel = parseCSQ(query(transport, "AT+CSQ", prefix: "+CSQ:"))
-        status.operatorName = parseOperator(query(transport, "AT+COPS?", prefix: "+COPS:"))
-        parseQNWInfo(query(transport, "AT+QNWINFO", prefix: "+QNWINFO:"), into: &status)
-        status.usbNetMode = parseUSBNetMode(query(transport, "AT+QCFG=\"usbnet\"", prefix: "+QCFG:"))
-        status.usbConfig = value(after: "+QCFG:", in: queryRaw(transport, "AT+QCFG=\"usbcfg\""))
-        status.ipAddress = parseIPAddress(query(transport, "AT+CGPADDR=1", prefix: "+CGPADDR:"))
+        status.simState = parseSIMState(try query(transport, "AT+CPIN?", prefix: "+CPIN:"))
+        status.signalLevel = parseCSQ(try query(transport, "AT+CSQ", prefix: "+CSQ:"))
+        status.operatorName = parseOperator(try query(transport, "AT+COPS?", prefix: "+COPS:"))
+        parseQNWInfo(try query(transport, "AT+QNWINFO", prefix: "+QNWINFO:"), into: &status)
+        status.usbNetMode = parseUSBNetMode(try query(transport, "AT+QCFG=\"usbnet\"", prefix: "+QCFG:"))
+        status.usbConfig = value(after: "+QCFG:", in: try queryRaw(transport, "AT+QCFG=\"usbcfg\""))
+        status.ipAddress = parseIPAddress(try query(transport, "AT+CGPADDR=1", prefix: "+CGPADDR:"))
         status.lastUpdated = Date()
         return status
     }
@@ -83,13 +83,16 @@ enum ATClient {
     /// 查询数据连接状态：APN 上下文、激活状态与模块侧 IP。
     static func queryPDPStatus(transport: any ModemTransport) throws -> PDPStatus {
         var status = PDPStatus()
-        if let contexts = try? transport.command("AT+CGDCONT?", timeout: 3) {
+        let contexts = try queryRaw(transport, "AT+CGDCONT?")
+        if !contexts.isEmpty {
             status.contexts = parseCGDCONT(contexts)
         }
-        if let active = try? transport.command("AT+CGACT?", timeout: 3) {
+        let active = try queryRaw(transport, "AT+CGACT?")
+        if !active.isEmpty {
             status.activeIDs = parseCGACT(active)
         }
-        if let addresses = try? transport.command("AT+CGPADDR=1", timeout: 3) {
+        let addresses = try queryRaw(transport, "AT+CGPADDR=1")
+        if !addresses.isEmpty {
             status.addresses = parseCGPADDR(addresses)
         }
         return status
@@ -195,13 +198,20 @@ enum ATClient {
 
     // MARK: - 解析工具
 
-    private static func query(_ transport: any ModemTransport, _ command: String, prefix: String) -> String {
-        guard let response = try? transport.command(command, timeout: 3) else { return "" }
+    private static func query(_ transport: any ModemTransport, _ command: String, prefix: String) throws -> String {
+        let response = try queryRaw(transport, command)
+        guard !response.isEmpty else { return "" }
         return value(after: prefix, in: response)
     }
 
-    private static func queryRaw(_ transport: any ModemTransport, _ command: String) -> String {
-        (try? transport.command(command, timeout: 3)) ?? ""
+    private static func queryRaw(_ transport: any ModemTransport, _ command: String) throws -> String {
+        do {
+            return try transport.command(command, timeout: 3)
+        } catch let error as ModemError where error.isTransportFailure {
+            throw error
+        } catch {
+            return ""
+        }
     }
 
     private static func value(after prefix: String, in response: String) -> String {
@@ -292,18 +302,18 @@ enum ATClient {
     /// 读取本机号码：优先 `AT+CNUM`，它直接返回 SIM 卡登记的本机号码；
     /// 但很多运营商没有把号码写进 SIM，此时回退读取 SIM 卡的
     /// “本机号码”电话簿（EF_MSISDN，电话簿名 `ON`）。
-    private static func readPhoneNumber(_ transport: any ModemTransport) -> (number: String, source: String) {
-        let cnum = parseCNUM(queryRaw(transport, "AT+CNUM"))
+    private static func readPhoneNumber(_ transport: any ModemTransport) throws -> (number: String, source: String) {
+        let cnum = parseCNUM(try queryRaw(transport, "AT+CNUM"))
         if !cnum.isEmpty {
             return (cnum, "AT+CNUM")
         }
 
-        let previousStorage = parseCPBSStorage(queryRaw(transport, "AT+CPBS?"))
-        _ = queryRaw(transport, "AT+CPBS=\"ON\"")
-        let numbers = parseCPBR(queryRaw(transport, "AT+CPBR=1,10"))
+        let previousStorage = parseCPBSStorage(try queryRaw(transport, "AT+CPBS?"))
+        _ = try queryRaw(transport, "AT+CPBS=\"ON\"")
+        let numbers = parseCPBR(try queryRaw(transport, "AT+CPBR=1,10"))
         let restoreStorage = (previousStorage?.isEmpty == false ? previousStorage : nil) ?? "SM"
         if restoreStorage != "ON" {
-            _ = queryRaw(transport, "AT+CPBS=\"\(restoreStorage)\"")
+            _ = try queryRaw(transport, "AT+CPBS=\"\(restoreStorage)\"")
         }
         if let first = numbers.first {
             return (first, "SIM 卡本机号码（AT+CPBR）")

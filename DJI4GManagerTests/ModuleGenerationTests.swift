@@ -17,4 +17,12 @@ final class ModuleGenerationTests: XCTestCase {
         XCTAssertEqual(DJIModuleGeneration.gen1.detailText, "一代模块（2ca3:4006）")
         XCTAssertEqual(DJIModuleGeneration.gen2.detailText, "二代模块（2ca3:4009）")
     }
+
+    func testFatalUSBErrorIncludesSleepWakeErrors() {
+        for code: Int32 in [-1, -4, -5, -9, -99] {
+            XCTAssertTrue(LibusbTransport.isFatalUSBError(code), "Expected \(code) to be fatal")
+        }
+        XCTAssertFalse(LibusbTransport.isFatalUSBError(0))
+        XCTAssertFalse(LibusbTransport.isFatalUSBError(-7))
+    }
 }

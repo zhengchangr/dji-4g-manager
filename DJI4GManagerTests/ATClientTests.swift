@@ -158,4 +158,45 @@ final class ATClientTests: XCTestCase {
         let channel = try ATClient.openEUICCChannel(transport: transport, aid: ATClient.euiccAIDs[0].aid)
         XCTAssertNoThrow(try ESIMProtocol.enableProfile(transport: transport, channel: channel, iccid: "89860113911122334455"))
     }
+
+    func testRefreshStatusPropagatesTransportFailure() {
+        let failing = FailingTransport(error: .usb("写入失败（-9）"))
+        XCTAssertThrowsError(try ATClient.refreshStatus(transport: failing)) { error in
+            XCTAssertEqual(error as? ModemError, .usb("写入失败（-9）"))
+        }
+        XCTAssertThrowsError(try ATClient.queryPDPStatus(transport: failing)) { error in
+            XCTAssertEqual(error as? ModemError, .usb("写入失败（-9）"))
+        }
+    }
+
+    func testRefreshStatusIgnoresCommandFailedError() throws {
+        let failing = FailingTransport(error: .commandFailed("ERROR"))
+        let status = try ATClient.refreshStatus(transport: failing)
+        XCTAssertTrue(status.isPresent)
+        XCTAssertEqual(status.manufacturer, "")
+    }
+
+    func testModemSessionCloseSyncClosesTransport() async throws {
+        let session = ModemSession()
+        let transport = StaticTransport(responses: [:])
+        try await session.connect(transport)
+        XCTAssertTrue(session.isConnected)
+        session.closeSync()
+        XCTAssertFalse(session.isConnected)
+        XCTAssertFalse(transport.isOpen)
+    }
+}
+
+private final class FailingTransport: ModemTransport {
+    let error: ModemError
+    var isOpen = true
+
+    init(error: ModemError) {
+        self.error = error
+    }
+
+    func open() throws { isOpen = true }
+    func close() { isOpen = false }
+    func command(_ command: String, timeout: TimeInterval) throws -> String { throw error }
+    func commandWithPrompt(_ command: String, followUp: [UInt8], timeout: TimeInterval) throws -> String { throw error }
 }

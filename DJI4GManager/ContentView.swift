@@ -55,6 +55,32 @@ struct ContentView: View {
                     .padding([.horizontal, .top], 16)
             }
 
+            if let recovery = appState.wakeRecovery {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        if recovery.progress >= 1.0 {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(recovery.step)
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                        Text("\(Int(recovery.progress * 100))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    ProgressView(value: recovery.progress, total: 1.0)
+                        .progressViewStyle(.linear)
+                        .tint(recovery.progress >= 1.0 ? .green : .accentColor)
+                }
+                .padding(12)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding([.horizontal, .top], 16)
+            }
+
             if let error = appState.lastError {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -87,7 +113,10 @@ struct ContentView: View {
     }
 
     private var indicatorColor: Color {
-        switch appState.phase {
+        if let recovery = appState.wakeRecovery {
+            return recovery.progress >= 1.0 ? .green : .blue
+        }
+        return switch appState.phase {
         case .connected: .green
         case .switching: .orange
         case .gen2Only: .orange
@@ -97,6 +126,9 @@ struct ContentView: View {
     }
 
     private var phaseText: String {
+        if let recovery = appState.wakeRecovery {
+            return recovery.progress >= 1.0 ? "4G 网络已恢复" : "正在恢复网络…"
+        }
         switch appState.phase {
         case .connected:
             if let generation = appState.detectedGeneration {
